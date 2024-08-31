@@ -2,13 +2,12 @@
 
 use Spatie\LaravelData\Casts\EnumCast;
 use Spatie\LaravelData\Casts\Uncastable;
-use Spatie\LaravelData\Support\DataProperty;
-use Spatie\LaravelData\Tests\Fakes\DummyBackedEnum;
-use Spatie\LaravelData\Tests\Fakes\DummyUnitEnum;
+use Spatie\LaravelData\Support\Creation\CreationContextFactory;
+use Spatie\LaravelData\Tests\Factories\FakeDataStructureFactory;
+use Spatie\LaravelData\Tests\Fakes\Enums\DummyBackedEnum;
+use Spatie\LaravelData\Tests\Fakes\Enums\DummyUnitEnum;
 
 beforeEach(function () {
-    onlyPHP81();
-
     $this->caster = new EnumCast();
 });
 
@@ -19,9 +18,10 @@ it('can cast enum', function () {
 
     expect(
         $this->caster->cast(
-            DataProperty::create(new ReflectionProperty($class, 'enum')),
+            FakeDataStructureFactory::property($class, 'enum'),
             'foo',
-            []
+            [],
+            CreationContextFactory::createFromConfig($class::class)->get()
         )
     )->toEqual(DummyBackedEnum::FOO);
 });
@@ -32,7 +32,12 @@ it('fails when it cannot cast an enum from value', function () {
     };
 
     expect(
-        $this->caster->cast(DataProperty::create(new ReflectionProperty($class, 'enum')), 'bar', [])
+        $this->caster->cast(
+            FakeDataStructureFactory::property($class, 'enum'),
+            'bar',
+            [],
+            CreationContextFactory::createFromConfig($class::class)->get()
+        )
     )->toEqual(DummyBackedEnum::FOO);
 })->throws(Exception::class);
 
@@ -42,7 +47,12 @@ it('fails when casting an unit enum', function () {
     };
 
     expect(
-        $this->caster->cast(DataProperty::create(new ReflectionProperty($class, 'enum')), 'foo', [])
+        $this->caster->cast(
+            FakeDataStructureFactory::property($class, 'enum'),
+            'foo',
+            [],
+            CreationContextFactory::createFromConfig($class::class)->get()
+        )
     )->toEqual(Uncastable::create());
 });
 
@@ -52,7 +62,12 @@ it('fails with other types', function () {
     };
 
     expect(
-        $this->caster->cast(DataProperty::create(new ReflectionProperty($class, 'int')), 'foo', [])
+        $this->caster->cast(
+            FakeDataStructureFactory::property($class, 'int'),
+            'foo',
+            [],
+            CreationContextFactory::createFromConfig($class::class)->get(),
+        )
     )
         ->toEqual(Uncastable::create());
 });

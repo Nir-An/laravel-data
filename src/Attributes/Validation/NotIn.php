@@ -5,26 +5,37 @@ namespace Spatie\LaravelData\Attributes\Validation;
 use Attribute;
 use Illuminate\Support\Arr;
 use Illuminate\Validation\Rules\NotIn as BaseNotIn;
+use Spatie\LaravelData\Support\Validation\References\RouteParameterReference;
+use Spatie\LaravelData\Support\Validation\ValidationPath;
 
-#[Attribute(Attribute::TARGET_PROPERTY)]
-class NotIn extends ValidationAttribute
+#[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_PARAMETER)]
+class NotIn extends ObjectValidationAttribute
 {
-    protected BaseNotIn $rule;
+    protected ?BaseNotIn $rule = null;
 
-    public function __construct(array|string|BaseNotIn ...$values)
+    protected array $values;
+
+    public function __construct(array|string|BaseNotIn|RouteParameterReference ...$values)
     {
-        if (count($values) === 1 && $values[0] instanceof BaseNotIn) {
-            $this->rule = $values[0];
-
-            return;
-        }
-
-        $this->rule = new BaseNotIn(Arr::flatten($values));
+        $this->values = $values;
     }
 
-    public function getRules(): array
+    public function getRule(ValidationPath $path): object|string
     {
-        return [$this->rule];
+        if($this->rule) {
+            return $this->rule;
+        }
+
+        if (count($this->values) === 1 && $this->values[0] instanceof BaseNotIn) {
+            return $this->values[0];
+        }
+
+        $this->values = array_map(
+            fn (string|RouteParameterReference $value) => $this->normalizePossibleRouteReferenceParameter($value),
+            Arr::flatten($this->values)
+        );
+
+        return  new BaseNotIn($this->values);
     }
 
     public static function keyword(): string

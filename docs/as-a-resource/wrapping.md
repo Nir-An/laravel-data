@@ -1,9 +1,9 @@
 ---
 title: Wrapping
-weight: 3
+weight: 5
 ---
 
-By default, when a data object is transformed into JSON in your controller it looks like this:
+By default, when a data object is transformed into JSON in your controller, it looks like this:
 
 ```json
 {
@@ -29,7 +29,7 @@ Now the JSON looks like this:
 }
 ```
 
-Data objects will only get wrapped when you're sending them as a response and never when calling `toArray` or `toJson` on it.
+Data objects and collections will only get wrapped when you're sending them as a response and never when calling `toArray` or `toJson` on it.
 
 It is possible to define a default wrap key inside a data object:
 
@@ -61,7 +61,7 @@ Or you can set a global wrap key inside the `data.php` config file:
 Collections can be wrapped just like data objects:
 
 ```php
-SongData::collection(Song::all())->wrap('data');
+SongData::collect(Song::all(), DataCollection::class)->wrap('data');
 ```
 
 The JSON will now look like this:
@@ -84,7 +84,7 @@ The JSON will now look like this:
 It is possible to set the data key in paginated collections:
 
 ```php
-SongData::collection(Song::paginate())->wrap('paginated_data');
+SongData::collect(Song::paginate(), PaginatedDataCollection::class)->wrap('paginated_data');
 ```
 
 Which will let the JSON look like this:
@@ -161,6 +161,7 @@ A data collection inside a data object WILL get wrapped when a wrapping key is s
 
 ```php
 use Spatie\LaravelData\Attributes\DataCollectionOf;
+use Spatie\LaravelData\DataCollection;
 
 class AlbumData extends Data
 {
@@ -175,7 +176,7 @@ class AlbumData extends Data
     {
         return new self(
             $album->title,
-            SongData::collection($album->songs)->wrap('data')
+            SongData::collect($album->songs, DataCollection::class)->wrap('data')
         );
     }
 }
@@ -207,8 +208,16 @@ The JSON will look like this:
 
 ## Disabling wrapping
 
-Whenever a data object is wrapped due to the default wrap method or a global wrap key , it is possible to disable wrapping on a data object/collection:
+Whenever a data object is wrapped due to the default wrap method or a global wrap key, it is possible to disable wrapping on a data object/collection:
 
 ```php
 SongData::from(Song::first())->withoutWrapping();
+```
+
+## Getting a wrapped array
+
+By default, `toArray` and `toJson` will never wrap a data object or collection, but it is possible to get a wrapped array:
+
+```php
+SongData::from(Song::first())->wrap('data')->transform(wrapExecutionType: WrapExecutionType::Enabled);
 ```

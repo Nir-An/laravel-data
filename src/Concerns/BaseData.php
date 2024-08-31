@@ -2,33 +2,30 @@
 
 namespace Spatie\LaravelData\Concerns;
 
-use Illuminate\Contracts\Pagination\CursorPaginator;
-use Illuminate\Contracts\Pagination\Paginator;
+use Illuminate\Contracts\Pagination\CursorPaginator as CursorPaginatorContract;
+use Illuminate\Contracts\Pagination\Paginator as PaginatorContract;
 use Illuminate\Pagination\AbstractCursorPaginator;
 use Illuminate\Pagination\AbstractPaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Enumerable;
+use Illuminate\Support\LazyCollection;
 use Spatie\LaravelData\CursorPaginatedDataCollection;
 use Spatie\LaravelData\DataCollection;
 use Spatie\LaravelData\DataPipeline;
 use Spatie\LaravelData\DataPipes\AuthorizedDataPipe;
 use Spatie\LaravelData\DataPipes\CastPropertiesDataPipe;
 use Spatie\LaravelData\DataPipes\DefaultValuesDataPipe;
+use Spatie\LaravelData\DataPipes\FillRouteParameterPropertiesDataPipe;
 use Spatie\LaravelData\DataPipes\MapPropertiesDataPipe;
 use Spatie\LaravelData\DataPipes\ValidatePropertiesDataPipe;
 use Spatie\LaravelData\PaginatedDataCollection;
-use Spatie\LaravelData\Resolvers\DataFromSomethingResolver;
-use Spatie\LaravelData\Resolvers\EmptyDataResolver;
-use Spatie\LaravelData\Support\Wrapping\WrapExecutionType;
-use Spatie\LaravelData\Transformers\DataTransformer;
+use Spatie\LaravelData\Support\Creation\CreationContext;
+use Spatie\LaravelData\Support\Creation\CreationContextFactory;
+use Spatie\LaravelData\Support\DataConfig;
+use Spatie\LaravelData\Support\DataProperty;
 
 trait BaseData
 {
-    protected static string $collectionClass = DataCollection::class;
-
-    protected static string $paginatedCollectionClass = PaginatedDataCollection::class;
-
-    protected static string $cursorPaginatedCollectionClass = CursorPaginatedDataCollection::class;
-
     public static function optional(mixed ...$payloads): ?static
     {
         if (count($payloads) === 0) {
@@ -46,18 +43,21 @@ trait BaseData
 
     public static function from(mixed ...$payloads): static
     {
-        return app(DataFromSomethingResolver::class)->execute(
-            static::class,
-            ...$payloads
-        );
+        return static::factory()->from(...$payloads);
     }
 
-    public static function withoutMagicalCreationFrom(mixed ...$payloads): static
+    public static function collect(mixed $items, ?string $into = null): array|DataCollection|PaginatedDataCollection|CursorPaginatedDataCollection|Enumerable|AbstractPaginator|PaginatorContract|AbstractCursorPaginator|CursorPaginatorContract|LazyCollection|Collection
     {
-        return app(DataFromSomethingResolver::class)->withoutMagicalCreation()->execute(
-            static::class,
-            ...$payloads
-        );
+        return static::factory()->collect($items, $into);
+    }
+
+    public static function factory(?CreationContext $creationContext = null): CreationContextFactory
+    {
+        if ($creationContext) {
+            return CreationContextFactory::createFromCreationContext(static::class, $creationContext);
+        }
+
+        return CreationContextFactory::createFromConfig(static::class);
     }
 
     public static function normalizers(): array
@@ -71,34 +71,26 @@ trait BaseData
             ->into(static::class)
             ->through(AuthorizedDataPipe::class)
             ->through(MapPropertiesDataPipe::class)
+            ->through(FillRouteParameterPropertiesDataPipe::class)
             ->through(ValidatePropertiesDataPipe::class)
             ->through(DefaultValuesDataPipe::class)
             ->through(CastPropertiesDataPipe::class);
     }
 
-    public static function collection(Enumerable|array|AbstractPaginator|Paginator|AbstractCursorPaginator|CursorPaginator|DataCollection $items): DataCollection|CursorPaginatedDataCollection|PaginatedDataCollection
+    public static function prepareForPipeline(array $properties): array
     {
-        if ($items instanceof Paginator || $items instanceof AbstractPaginator) {
-            return new (static::$paginatedCollectionClass)(static::class, $items);
-        }
-
-        if ($items instanceof AbstractCursorPaginator || $items instanceof CursorPaginator) {
-            return new (static::$cursorPaginatedCollectionClass)(static::class, $items);
-        }
-
-        return new (static::$collectionClass)(static::class, $items);
+        return $properties;
     }
 
-    public static function empty(array $extra = []): array
+    public function __sleep(): array
     {
-        return app(EmptyDataResolver::class)->execute(static::class, $extra);
-    }
+        $dataClass = app(DataConfig::class)->getDataClass(static::class);
 
-    public function transform(
-        bool $transformValues = true,
-        WrapExecutionType $wrapExecutionType = WrapExecutionType::Disabled,
-        bool $mapPropertyNames = true,
-    ): array {
-        return DataTransformer::create($transformValues, $wrapExecutionType, $mapPropertyNames)->transform($this);
+        return $dataClass
+            ->properties
+            ->map(fn (DataProperty $property) => $property->name)
+            ->when($dataClass->appendable, fn (Collection $properties) => $properties->push('_additional'))
+            ->when(property_exists($this, '_dataContext'), fn (Collection $properties) => $properties->push('_dataContext'))
+            ->toArray();
     }
 }

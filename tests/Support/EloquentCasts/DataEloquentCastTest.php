@@ -1,11 +1,19 @@
 <?php
 
+use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 
 use function Pest\Laravel\assertDatabaseHas;
 
-use Spatie\LaravelData\Tests\Fakes\DummyModelWithCasts;
+use Spatie\LaravelData\Support\DataConfig;
+use Spatie\LaravelData\Tests\Fakes\AbstractData\AbstractDataA;
+use Spatie\LaravelData\Tests\Fakes\AbstractData\AbstractDataB;
+use Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithCasts;
+use Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithDefaultCasts;
+use Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithEncryptedCasts;
 use Spatie\LaravelData\Tests\Fakes\SimpleData;
+use Spatie\LaravelData\Tests\Fakes\SimpleDataWithDefaultValue;
 
 beforeEach(function () {
     DummyModelWithCasts::migrate();
@@ -36,7 +44,7 @@ it('can load a data object', function () {
         'data' => json_encode(['string' => 'Test']),
     ]);
 
-    /** @var \Spatie\LaravelData\Tests\Fakes\DummyModelWithCasts $model */
+    /** @var \Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithCasts $model */
     $model = DummyModelWithCasts::first();
 
     expect($model->data)->toEqual(new SimpleData('Test'));
@@ -57,8 +65,121 @@ it('can load null as a value', function () {
         'data' => null,
     ]);
 
-    /** @var \Spatie\LaravelData\Tests\Fakes\DummyModelWithCasts $model */
+    /** @var \Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithCasts $model */
     $model = DummyModelWithCasts::first();
 
     expect($model->data)->toBeNull();
+});
+
+it('loads a cast object when nullable argument used and value is null in database', function () {
+    DB::table('dummy_model_with_casts')->insert([
+        'data' => null,
+    ]);
+
+    /** @var \Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithDefaultCasts $model */
+    $model = DummyModelWithDefaultCasts::first();
+
+    expect($model->data)
+        ->toBeInstanceOf(SimpleDataWithDefaultValue::class)
+        ->string->toEqual('default');
+});
+
+it('can use an abstract data class with multiple children', function () {
+    $abstractA = new AbstractDataA('A\A');
+    $abstractB = new AbstractDataB('B\B');
+
+    $modelId = DummyModelWithCasts::create([
+        'abstract_data' => $abstractA,
+    ])->id;
+
+    $model = DummyModelWithCasts::find($modelId);
+
+    expect($model->abstract_data)
+        ->toBeInstanceOf(AbstractDataA::class)
+        ->a->toBe('A\A');
+
+    $model->abstract_data = $abstractB;
+    $model->save();
+
+    $model = DummyModelWithCasts::find($modelId);
+
+    expect($model->abstract_data)
+        ->toBeInstanceOf(AbstractDataB::class)
+        ->b->toBe('B\B');
+});
+
+it('can use an abstract data class with morph map', function () {
+    app(DataConfig::class)->enforceMorphMap([
+        'a' => AbstractDataA::class,
+    ]);
+
+    $abstractA = new AbstractDataA('A\A');
+    $abstractB = new AbstractDataB('B\B');
+
+    $modelA = DummyModelWithCasts::create([
+        'abstract_data' => $abstractA,
+    ]);
+
+    $modelB = DummyModelWithCasts::create([
+        'abstract_data' => $abstractB,
+    ]);
+
+    expect(json_decode($modelA->getRawOriginal('abstract_data'))->type)->toBe('a');
+    expect(json_decode($modelB->getRawOriginal('abstract_data'))->type)->toBe(AbstractDataB::class);
+
+    $loadedMorphedModel = DummyModelWithCasts::find($modelA->id);
+
+    expect($loadedMorphedModel->abstract_data)
+        ->toBeInstanceOf(AbstractDataA::class)
+        ->a->toBe('A\A');
+});
+
+it('can save an encrypted data object', function () {
+    $model = DummyModelWithEncryptedCasts::create([
+        'data' => new SimpleData('Test'),
+    ]);
+
+    try {
+        Crypt::decryptString($model->getRawOriginal('data'));
+        $isEncrypted = true;
+    } catch (DecryptException $e) {
+        $isEncrypted = false;
+    }
+
+    expect($isEncrypted)->toBeTrue();
+});
+
+it('can load an encrypted data object', function () {
+    DummyModelWithEncryptedCasts::create([
+        'data' => new SimpleData('Test'),
+    ]);
+
+    /** @var \Spatie\LaravelData\Tests\Fakes\Models\DummyModelWithCasts $model */
+    $model = DummyModelWithEncryptedCasts::first();
+
+    expect($model->data)->toEqual(new SimpleData('Test'));
+});
+
+it('can load and save an abstract defined data object', function () {
+    $abstractA = new AbstractDataA('A\A');
+
+    $modelId = DummyModelWithEncryptedCasts::create([
+        'abstract_data' => $abstractA,
+    ])->id;
+
+    $model = DummyModelWithEncryptedCasts::find($modelId);
+
+    expect($model->abstract_data)
+        ->toBeInstanceOf(AbstractDataA::class)
+        ->a->toBe('A\A');
+
+
+    try {
+        Crypt::decryptString($model->getRawOriginal('abstract_data'));
+        $isEncrypted = true;
+    } catch (DecryptException $e) {
+        $isEncrypted = false;
+    }
+
+    expect($isEncrypted)->toBeTrue();
 });

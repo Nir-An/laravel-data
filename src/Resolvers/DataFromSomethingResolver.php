@@ -3,105 +3,117 @@
 namespace Spatie\LaravelData\Resolvers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Spatie\LaravelData\Contracts\BaseData;
-use Spatie\LaravelData\DataPipeline;
-use Spatie\LaravelData\DataPipes\AuthorizedDataPipe;
-use Spatie\LaravelData\DataPipes\MapPropertiesDataPipe;
-use Spatie\LaravelData\DataPipes\ValidatePropertiesDataPipe;
-use Spatie\LaravelData\Normalizers\ArrayableNormalizer;
+use Spatie\LaravelData\Enums\CustomCreationMethodType;
+use Spatie\LaravelData\Optional;
+use Spatie\LaravelData\Support\Creation\CreationContext;
 use Spatie\LaravelData\Support\DataConfig;
-use Spatie\LaravelData\Support\DataMethod;
 
+/**
+ * @template TData of BaseData
+ */
 class DataFromSomethingResolver
 {
     public function __construct(
         protected DataConfig $dataConfig,
         protected DataFromArrayResolver $dataFromArrayResolver,
-        protected bool $withoutMagicalCreation = false,
-        protected array $ignoredMagicalMethods = [],
     ) {
     }
 
-    public function withoutMagicalCreation(bool $withoutMagicalCreation = true): self
-    {
-        $this->withoutMagicalCreation = $withoutMagicalCreation;
-
-        return $this;
-    }
-
-    public function ignoreMagicalMethods(string ...$methods): self
-    {
-        array_push($this->ignoredMagicalMethods, ...$methods);
-
-        return $this;
-    }
-
-    public function execute(string $class, mixed ...$payloads): BaseData
-    {
-        if ($data = $this->createFromCustomCreationMethod($class, $payloads)) {
+    /**
+     * @param class-string<TData> $class
+     *
+     * @return TData
+     */
+    public function execute(
+        string $class,
+        CreationContext $creationContext,
+        mixed ...$payloads
+    ): BaseData {
+        if ($data = $this->createFromCustomCreationMethod($class, $creationContext, $payloads)) {
             return $data;
         }
 
-        $properties = array_reduce(
-            $payloads,
-            function (Collection $carry, mixed $payload) use ($class) {
-                /** @var BaseData $class */
-                $pipeline = $class::pipeline();
+        $pipeline = $this->dataConfig->getResolvedDataPipeline($class);
 
-                foreach ($class::normalizers() as $normalizer) {
-                    $pipeline->normalizer($normalizer);
+        $payloadCount = count($payloads);
+
+        if ($payloadCount === 0 || $payloadCount === 1) {
+            return $this->dataFromArrayResolver->execute(
+                $class,
+                $pipeline->execute($payloads[0] ?? [], $creationContext)
+            );
+        }
+
+        $properties = [];
+
+        foreach ($payloads as $payload) {
+            foreach ($pipeline->execute($payload, $creationContext) as $key => $value) {
+                if (array_key_exists($key, $properties) && ($value === null || $value instanceof Optional)) {
+                    continue;
                 }
 
-                return $carry->merge($pipeline->using($payload)->execute());
-            },
-            collect(),
-        );
+                $properties[$key] = $value;
+            }
+        }
 
         return $this->dataFromArrayResolver->execute($class, $properties);
     }
 
-    protected function createFromCustomCreationMethod(string $class, array $payloads): ?BaseData
-    {
-        if ($this->withoutMagicalCreation) {
+    protected function createFromCustomCreationMethod(
+        string $class,
+        CreationContext $creationContext,
+        array $payloads
+    ): ?BaseData {
+        if ($creationContext->disableMagicalCreation) {
             return null;
         }
 
-        /** @var Collection<\Spatie\LaravelData\Support\DataMethod> $customCreationMethods */
         $customCreationMethods = $this->dataConfig
             ->getDataClass($class)
-            ->methods
-            ->filter(
-                fn (DataMethod $method) => $method->isCustomCreationMethod
-                && ! in_array($method->name, $this->ignoredMagicalMethods)
-            );
+            ->methods;
 
-        $methodName = null;
+        $method = null;
 
         foreach ($customCreationMethods as $customCreationMethod) {
+            if ($customCreationMethod->customCreationMethodType !== CustomCreationMethodType::Object) {
+                continue;
+            }
+
+            if (
+                $creationContext->ignoredMagicalMethods !== null
+                && in_array($customCreationMethod->name, $creationContext->ignoredMagicalMethods)
+            ) {
+                continue;
+            }
+
             if ($customCreationMethod->accepts(...$payloads)) {
-                $methodName = $customCreationMethod->name;
+                $method = $customCreationMethod;
 
                 break;
             }
         }
 
-        if ($methodName === null) {
+        if ($method === null) {
             return null;
         }
 
+        $pipeline = $this->dataConfig->getResolvedDataPipeline($class);
+
         foreach ($payloads as $payload) {
             if ($payload instanceof Request) {
-                DataPipeline::create()
-                    ->normalizer(ArrayableNormalizer::class)
-                    ->into($class)
-                    ->through(AuthorizedDataPipe::class)
-                    ->through(MapPropertiesDataPipe::class)
-                    ->through(ValidatePropertiesDataPipe::class)
-                    ->using($payload)
-                    ->execute();
+                // Solely for the purpose of validation
+                $pipeline->execute($payload, $creationContext);
             }
         }
+
+        foreach ($method->parameters as $index => $parameter) {
+            if ($parameter->type->type->isCreationContext()) {
+                $payloads[$index] = $creationContext;
+            }
+        }
+
+        $methodName = $method->name;
 
         return $class::$methodName(...$payloads);
     }

@@ -3,13 +3,15 @@ title: Quickstart
 weight: 1
 ---
 
-In this quickstart, we'll guide you through the most important functionalities of the package and how to use them. 
+In this quickstart, we'll guide you through the most important functionalities of the package and how to use them.
 
-First, you should [install the package](https://spatie.be/docs/laravel-data/v2/installation-setup).
+First, you should [install the package](/docs/laravel-data/v4/installation-setup).
 
-We're going to create a blog with different posts so let's get started with the `PostData` object. A post has a title, some content, a status and a date when it was published:
+We will create a blog with different posts, so let's start with the `PostData` object. A post has a title, some content, a status and a date when it was published:
 
 ```php
+use Spatie\LaravelData\Data;
+
 class PostData extends Data
 {
     public function __construct(
@@ -22,23 +24,22 @@ class PostData extends Data
 }
 ```
 
-The only requirement for using the package is extending your data objects from the base `Data` object. We add the requirements for a post as public properties. 
+Extending your data objects from the base `Data` object is the only requirement for using the package. We add the requirements for a post as public properties.
 
-The `PostStatus` is an enum using the [spatie/enum](https://github.com/spatie/enum) package:
+The `PostStatus` is a native enum:
 
 ```php
-/**
- * @method static self draft()
- * @method static self published()
- * @method static self archived()
- */
-class PostStatus extends Enum
+enum PostStatus: string
 {
-
+    case draft = 'draft';
+    case published = 'published';
+    case archived = 'archived';
 }
 ```
 
 We store this `PostData` object as `app/Data/PostData.php`, so we have all our data objects bundled in one directory, but you're free to store them wherever you want within your application.
+
+Tip: you can also quickly make a data object using the CLI: `php artisan make:data Post`, it will create a file `app/Data/PostData.php`.
 
 We can now create this a `PostData` object just like any plain PHP object:
 
@@ -46,7 +47,7 @@ We can now create this a `PostData` object just like any plain PHP object:
 $post = new PostData(
     'Hello laravel-data',
     'This is an introduction post for the new package',
-    PostStatus::published(),
+    PostStatus::published,
     CarbonImmutable::now()
 );
 ```
@@ -57,56 +58,140 @@ The package also allows you to create these data objects from any type, for exam
 $post = PostData::from([
     'title' => 'Hello laravel-data',
     'content' => 'This is an introduction post for the new package',
-    'status' => PostStatus::published(),
+    'status' => PostStatus::published,
     'published_at' => CarbonImmutable::now(),
 ]);
 ```
 
-## Using requests and casts
-
-Now let's say we have a Laravel request coming from the front with these properties. Our controller would then look like
-this:
+Or a `Post` model with the required properties:
 
 ```php
-public function __invoke(Request $request)
+class Post extends Model
 {
-    $post = PostData::from([
-        'title' => $request->input('title'),
-        'content' => $request->input('content'),
-        'status' => PostStatus::from($request->input('status')),
-        'published_at' => CarbonImmutable::createFromFormat(DATE_ATOM, $request->input('published_at')),
-    ]);
+    protected $guarded = [];
+
+    protected $casts = [
+        'status' => PostStatus::class,
+        'published_at' => 'immutable_datetime',
+    ];
 }
 ```
 
-That's a lot of code just to fill a data object. It would be a lot nicer if we could do this:
+Can be quickly transformed into a `PostData` object:
 
 ```php
-public function __invoke(Request $request)
-{
-    $post = PostData::from($request);
-}
+PostData::from(Post::findOrFail($id));
 ```
 
-But this throws the following exception:
+## Using requests
 
-```
-TypeError: App\Data\PostData::__construct(): Argument #3 ($status) must be of type App\Enums\PostStatus, string given
-```
-
-That's because the status property expects a `PostStatus` enum object, but it gets a string. We can fix this by implementing a cast for enums:
+Let's say we have a Laravel request coming from the front with these properties. Our controller would then validate these properties, and then it would store them in a model; this can be done as such:
 
 ```php
-class PostStatusCast implements Cast
+class DataController
 {
-    public function cast(DataProperty $property, mixed $value, array $context): PostStatus
+    public function __invoke(Request $request)
     {
-        return PostStatus::from($value);
+        $request->validate($this->rules());
+
+        $postData = PostData::from([
+            'title' => $request->input('title'),
+            'content' => $request->input('content'),
+            'status' => $request->enum('status', PostStatus::class),
+            'published_at' => $request->has('published_at')
+                ? CarbonImmutable::createFromFormat(DATE_ATOM, $request->input('published_at'))
+                : null,
+        ]);
+
+        Post::create($postData->toArray());
+
+        return redirect()->back();
+    }
+
+    private function rules(): array
+    {
+        return [
+            'title' => ['required', 'string'],
+            'content' => ['required', 'string'],
+            'status' => ['required', new Enum(PostStatus::class)],
+            'published_at' => ['nullable', 'date'],
+        ];
     }
 }
 ```
 
-And tell the package always to use this cast when trying to create a `PostData` object:
+That's a lot of code to fill a data object, using laravel data we can remove a lot of code:
+
+```php
+class DataController
+{
+    public function __invoke(PostData $postData)
+    {
+        Post::create($postData->toArray());
+
+        return redirect()->back();
+    }
+}
+```
+
+Let's see what's happening:
+
+1) Laravel boots up, and the router directs to the `DataController`
+2) Because we're injecting `PostData`, two things happen
+    - `PostData` will generate validation rules based on the property types and validate the request
+    - The `PostData` object is automatically created from the request
+3) We're now in the `__invoke` method with a valid `PostData` object
+
+You can always check the generated validation rules of a data object like this:
+
+```php
+class DataController
+{
+    public function __invoke(Request $request)
+    {
+        dd(PostData::getValidationRules($request->toArray()));
+    }
+}
+```
+
+Which provides us with the following set of rules:
+
+```php
+array:4 [
+  "title" => array:2 [
+    0 => "required"
+    1 => "string"
+  ]
+  "content" => array:2 [
+    0 => "required"
+    1 => "string"
+  ]
+  "status" => array:2 [
+    0 => "required"
+    1 => Illuminate\Validation\Rules\Enum {
+      #type: "App\Enums\PostStatus"
+    }
+  ]
+  "published_at" => array:1 [
+    0 => "nullable"
+  ]
+]
+```
+
+As you can see, we're missing the `date` rule on the `published_at` property. By default, this package will automatically generate the following rules:
+
+- `required` when a property cannot be `null`
+- `nullable` when a property can be `null`
+- `numeric` when a property type is `int`
+- `string` when a property type is `string`
+- `boolean` when a property type is `bool`
+- `numeric` when a property type is `float`
+- `array` when a property type is `array`
+- `enum:*` when a property type is a native enum
+
+You can read more about the process of automated rule generation [here](/docs/laravel-data/v4/as-a-data-transfer-object/request-to-data-object#content-automatically-inferring-rules-for-properties-1).
+
+We can easily add the date rule by using an attribute to our data object:
 
 ```php
 class PostData extends Data
@@ -114,15 +199,58 @@ class PostData extends Data
     public function __construct(
         public string $title,
         public string $content,
-        #[WithCast(PostStatusCast::class)]
         public PostStatus $status,
+        #[Date]
         public ?CarbonImmutable $published_at
     ) {
     }
 }
 ```
 
-## Using global casts
+Now our validation rules look like this:
+
+```php
+array:4 [
+  "title" => array:2 [
+    0 => "required"
+    1 => "string"
+  ]
+  "content" => array:2 [
+    0 => "required"
+    1 => "string"
+  ]
+  "status" => array:2 [
+    0 => "required"
+    1 => Illuminate\Validation\Rules\Enum {
+      #type: "App\Enums\PostStatus"
+    }
+  ]
+  "published_at" => array:2 [
+    0 => "nullable"
+    1 => "date"
+  ]
+]
+```
+
+There are [tons](/docs/laravel-data/v4/advanced-usage/validation-attributes) of validation rule attributes you can add to data properties. There's still much more you can do with validating data objects. Read more about it [here](/docs/laravel-data/v4/as-a-data-transfer-object/request-to-data-object#validating-a-request).
+
+Tip: By default, when creating a data object in a non request context, no validation is executed:
+
+```php
+$post = PostData::from([
+	// As long as PHP accepts the values for the properties, the object will be created
+]);
+```
+
+You can create validated objects without requests like this:
+
+```php
+$post = PostData::validateAndCreate([
+	// Before creating the object, each value will be validated
+]);
+```
+
+## Casting data
 
 Let's send the following payload to the controller:
 
@@ -137,9 +265,7 @@ Let's send the following payload to the controller:
 
 We get the `PostData` object populated with the values in the JSON payload, neat! But how did the package convert the `published_at` string into a `CarbonImmutable` object?
 
-It is possible to define global casts within the `data.php` config file. These casts will be used on data objects if no other casts can be found.
-
-By default, the global casts list looks like this:
+It is possible to define casts within the `data.php` config file. By default, the casts list looks like this:
 
 ```php
 'casts' => [
@@ -147,75 +273,82 @@ By default, the global casts list looks like this:
 ],
 ```
 
-This means that if a class property is of type `DateTime`, `Carbon`, `CarbonImmutable`, ... it will be automatically converted.
+This code means that if a class property is of type `DateTime`, `Carbon`, `CarbonImmutable`, ... it will be automatically cast.
 
-You can read more about casting [here](/docs/laravel-data/v2/as-a-data-transfer-object/casts).
+You can create your own casts; read more about it [here](/docs/laravel-data/v4/advanced-usage/creating-a-cast).
 
-## Validation using form requests
+### Local casts
 
-Since we're working with requests, wouldn't it be cool to validate the data coming in from the request using the data object? Typically, you would create a request with a validator like this:
+Sometimes you need one specific cast in one specific data object; in such a case defining a local cast specific for the data object is a good option.
 
-```php
-class PostDataRequest extends FormRequest
-{
-    public function authorize()
-    {
-        return false;
-    }
-
-    public function rules()
-    {
-        return [
-            'title' => ['required', 'string', 'max:200'],
-            'content' => ['required', 'string'],
-            'status' => ['required', 'string', 'in:draft,published,archived'],
-            'published_at' => ['nullable', 'date']
-        ];
-    }
-}
-```
-
-Thanks to PHP 8.0 attributes, we can completely omit this `PostDataRequest` and use the data object instead:
+Let's say we have an `Image` class:
 
 ```php
-class PostData extends Data
+class Image
 {
     public function __construct(
-        #[Required, StringType, Max(200)]
-        public string $title,
-        #[Required, StringType]
-        public string $content,
-        #[Required, StringType, In(['draft', 'published', 'archived'])]
-        public PostStatus $status,
-        #[Nullable, Date]
-        public ?CarbonImmutable $published_at
+        public string $file,
+        public int $size,
     ) {
     }
 }
 ```
 
-You can now inject the data object into your application, just like a Laravel form request:
+There are two options how an `Image` can be created:
+
+a) From a file upload
+b) From an array when the image has been stored in the database
+
+Let's create a cast for this:
 
 ```php
-public function __invoke(PostData $data)
+use Illuminate\Http\UploadedFile;
+use Spatie\LaravelData\Casts\Cast;
+use Spatie\LaravelData\Casts\Uncastable;
+use Spatie\LaravelData\Support\DataProperty;
+use Str;
+
+class ImageCast implements Cast
 {
-    dd($data); // a filled in data object
+        public function cast(DataProperty $property, mixed $value, array $properties, CreationContext $context): Image|Uncastable
+    {
+        // Scenario A
+        if ($value instanceof UploadedFile) {
+            $filename = $value->store('images', 'public');
+
+            return new Image(
+                $filename,
+                $value->getSize(),
+            );
+        }
+
+        // Scenario B
+        if (is_array($value)) {
+            return new Image(
+                $value['filename'],
+                $value['size'],
+            );
+        }
+
+        return Uncastable::create();
+    }
 }
+
 ```
 
-When the given data is invalid, a user will be redirected back with the validation errors in the error bag. If a validation occurs when making a JSON request, a 422 response will be returned with the validation errors.
+Ultimately, we return `Uncastable`, telling the package to try other casts (if available) because this cast cannot cast the value.
 
-Because our data object is so well-typed, we can even drop some validation rules since they can be automatically deduced:
+The last thing we need to do is add the cast to our property. We use the `WithCast` attribute for this:
 
 ```php
 class PostData extends Data
 {
     public function __construct(
-        #[Max(200)]
         public string $title,
         public string $content,
-        #[StringType, In(['draft', 'published', 'archived'])]
         public PostStatus $status,
+        #[WithCast(ImageCast::class)]
+        public ?Image $image,
         #[Date]
         public ?CarbonImmutable $published_at
     ) {
@@ -223,38 +356,13 @@ class PostData extends Data
 }
 ```
 
-There's still much more you can do with validating data objects. Read more about it [here](/docs/laravel-data/v2/as-a-data-transfer-object/request-to-data-object#validating-a-request).
-
-## Working with Eloquent models
-
-In our application, we have a `Post` Eloquent model:
-
-```php
-class Post extends Model
-{
-    protected $fillable = '*';
-
-    protected $casts = [
-        'status' => PostStatus::class
-    ];
-
-    protected $dates = [
-        'published_at'
-    ];
-}
-```
-
-Thanks to the casts we added earlier, this can be quickly transformed into a `PostData` object:
-
-```php
-PostData::from(Post::findOrFail($id));
-```
+You can read more about casting [here](/docs/laravel-data/v4/as-a-data-transfer-object/casts).
 
 ## Customizing the creation of a data object
 
-It is even possible to manually define how such a model is mapped onto a data object. To demonstrate that, we will take a completely different example that shows the strength of the `from` method.
+We've seen the powerful `from` method on data objects, you can throw anything at it, and it will cast the value into a data object. But what if it can't cast a specific type, or what if you want to change how a type is precisely cast into a data object?
 
-What if we would like to support to create posts via an email syntax like this:
+It is possible to manually define how a type is converted into a data object. What if we would like to support to create posts via an email syntax like this:
 
 ```
 title|status|content
@@ -274,8 +382,10 @@ class PostData extends Data
     public function __construct(
         public string $title,
         public string $content,
-        #[WithCast(PostStatusCast::class)]
         public PostStatus $status,
+        #[WithCast(ImageCast::class)]
+        public ?Image $image,
+        #[Date]
         public ?CarbonImmutable $published_at
     ) {
     }
@@ -288,6 +398,7 @@ class PostData extends Data
             $fields[0],
             $fields[2],
             PostStatus::from($fields[1]),
+            null,
             null
         );
     }
@@ -295,40 +406,56 @@ class PostData extends Data
 ```
 
 Magic creation methods allow you to create data objects from any type by passing them to the `from` method of a data
-object, you can read more about it [here](/laravel-data/v2/as-a-data-transfer-object/creating-a-data-object#magical-creation).
+object, you can read more about it [here](/laravel-data/v4/as-a-data-transfer-object/creating-a-data-object#magical-creation).
 
 It can be convenient to transform more complex models than our `Post` into data objects because you can decide how a model
 would be mapped onto a data object.
 
-## Nesting data objects and collections
+## Nesting data objects and arrays of data objects
 
-Now that we have a fully functional post data object. We're going to create a new data object, `AuthorData` that will store the name of an author and a collection of posts the author wrote:
+Now that we have a fully functional post-data object. We're going to create a new data object, `AuthorData`, that will store the name of an author and an array of posts the author wrote:
 
 ```php
+use Spatie\LaravelData\Attributes\DataCollectionOf;
+
 class AuthorData extends Data
 {
+    /**
+    * @param array<int, PostData> $posts
+    */
     public function __construct(
         public string $name,
-        /** @var \App\Data\PostData[] */
-        public DataCollection $posts
+        public array $posts
     ) {
     }
 }
 ```
 
-Instead of using an array to store all the posts, we use a `DataCollection`. This will be very useful later on! We now can create an author object as such:
+Notice that we've typed the `$posts` property as an array of `PostData` objects using a docblock.  This will be very useful later on! The package always needs to know what type of data objects are stored in an array. Of course, when you're storing other types then data objects this is not required but recommended.
+
+We can now create an author object as such:
 
 ```php
 new AuthorData(
     'Ruben Van Assche',
-    PostData::collection([
-        new PostData('Hello laravel-data', 'This is an introduction post for the new package', PostStatus::draft(), null),
-        new PostData('What is a data object', 'How does it work?', PostStatus::draft(), null),
+    PostData::collect([
+        [
+            'title' => 'Hello laravel-data',
+            'content' => 'This is an introduction post for the new package',
+            'status' => PostStatus::draft,
+        ],
+        [
+            'title' => 'What is a data object',
+            'content' => 'How does it work',
+            'status' => PostStatus::published,
+        ],
     ])
 );
 ```
 
-But it is also possible to create an author using the `from` method:
+As you can see, the `collect` method can create an array of the `PostData` objects.
+
+But there's another way; thankfully, our `from` method makes this process even more straightforward:
 
 ```php
 AuthorData::from([
@@ -337,22 +464,134 @@ AuthorData::from([
         [
             'title' => 'Hello laravel-data',
             'content' => 'This is an introduction post for the new package',
-            'status' => 'draft',
-            'published_at' => null,
+            'status' => PostStatus::draft,
         ],
         [
             'title' => 'What is a data object',
             'content' => 'How does it work',
-            'status' => 'draft',
-            'published_at' => null,
+            'status' => PostStatus::published,
         ],
     ],
 ]);
 ```
 
-The data object is smart enough to convert an array of posts into a data collection of post data. Mapping data coming from the frontend was never that easy!
+The data object is smart enough to convert an array of posts into an array of post data. Mapping data coming from the front end was never that easy!
 
-You can do a lot more with data collections. Read more about it [here](/docs/laravel-data/v2/as-a-data-transfer-object/collections).
+### Nesting objects
+
+Nesting an individual data object into another data object is perfectly possible. Remember the `Image` class we created? We needed a cast for it, but it is a perfect fit for a data object; let's create it:
+
+```php
+class ImageData extends Data
+{
+    public function __construct(
+        public string $filename,
+        public string $size,
+    ) {
+    }
+
+    public static function fromUploadedImage(UploadedFile $file): self
+    {
+        $stored = $file->store('images', 'public');
+
+        return new ImageData(
+            url($stored),
+            $file->getSize(),
+        );
+    }
+}
+```
+
+In our `ImageCast`, the image could be created from a file upload or an array; we'll handle that first case with the `fromUploadedImage` magic method. Because `Image` is now `ImageData,` the second case is automatically handled by the package, neat!
+
+We'll update our `PostData` object as such:
+
+```php
+class PostData extends Data
+{
+    public function __construct(
+        public string $title,
+        public string $content,
+        public PostStatus $status,
+        public ?ImageData $image,
+        #[Date]
+        public ?CarbonImmutable $published_at
+    ) {
+    }
+}
+```
+
+Creating a `PostData` object now can be done as such:
+
+```php
+return PostData::from([
+    'title' => 'Hello laravel-data',
+    'content' => 'This is an introduction post for the new package',
+    'status' => PostStatus::published,
+    'image' => [
+        'filename' => 'images/8JQtgd0XaPtt9CqkPJ3eWFVV4BAp6JR9ltYAIKqX.png',
+        'size' => 16524
+    ],
+    'published_at' => CarbonImmutable::create(2020, 05, 16),
+]);
+```
+
+When we create the `PostData` object in a controller as such:
+
+```php
+public function __invoke(PostData $postData)
+{
+    return $postData;
+}
+```
+
+We get a validation error:
+
+```json
+{
+    "message": "The image must be an array. (and 2 more errors)",
+    "errors": {
+        "image": [
+            "The image must be an array."
+        ],
+        "image.filename": [
+            "The image.filename field is required."
+        ],
+        "image.size": [
+            "The image.size field is required."
+        ]
+    }
+}
+```
+
+This is a neat feature of data; it expects a nested `ImageData` data object when being created from the request, an array with the keys `filename` and `size`.
+
+We can avoid this by manually defining the validation rules for this property:
+
+```php
+class PostData extends Data
+{
+    public function __construct(
+        public string $title,
+        public string $content,
+        public PostStatus $status,
+        #[WithoutValidation]
+        public ?ImageData $image,
+        #[Date]
+        public ?CarbonImmutable $published_at
+    ) {
+    }
+
+    public static function rules(ValidationContext $context): array
+    {
+        return [
+            'image' => ['nullable', 'image'],
+        ];
+    }
+}
+```
+
+In the `rules` method, we explicitly define the rules for `image .`Due to how this package validates data, the nested fields `image.filename` and `image.size` would still generate validation rules, thus failing the validation. The `#[WithoutValidation]` explicitly tells the package only the use the custom rules defined in the `rules` method.
 
 ## Usage in controllers
 
@@ -363,12 +602,12 @@ Let's say we have an API controller that returns a post:
 ```php
 public function __invoke()
 {
-    return new PostData(
-        'Hello laravel-data',
-        'This is an introduction post for the new package',
-        PostStatus::published(),
-        CarbonImmutable::create(2020, 05, 16),
-    );
+    return PostData::from([
+        'title' => 'Hello laravel-data',
+        'content' => 'This is an introduction post for the new package',
+        'status' => PostStatus::published,
+        'published_at' => CarbonImmutable::create(2020, 05, 16),
+    ]);
 }
 ```
 
@@ -376,10 +615,11 @@ By returning a data object in a controller, it is automatically converted to JSO
 
 ```json
 {
-    "title" : "Hello laravel-data",
-    "content" : "This is an introduction post for the new package",
-    "status" : "published",
-    "published_at" : "2021-09-24T13:31:20+00:00"
+    "title": "Hello laravel-data",
+    "content": "This is an introduction post for the new package",
+    "status": "published",
+    "image": null,
+    "published_at": "2020-05-16T00:00:00+00:00"
 }
 ```
 
@@ -392,11 +632,12 @@ $postData->toArray();
 Which gives you an array like this:
 
 ```php
-[
-    'title' => 'Hello laravel-data',
-    'content' => 'This is an introduction post for the new package',
-    'status' => 'published',
-    'published_at' => '2021-09-24T13:31:20+00:00',
+array:5 [
+  "title" => "Hello laravel-data"
+  "content" => "This is an introduction post for the new package"
+  "status" => "published"
+  "image" => null
+  "published_at" => "2020-05-16T00:00:00+00:00"
 ]
 ```
 
@@ -409,21 +650,28 @@ $postData->all();
 This will give the following array:
 
 ```php
-[
-    'title' => 'Hello laravel-data',
-    'content' => 'This is an introduction post for the new package',
-    'status' => PostStatus::published(),
-    'published_at' => CarbonImmutable::create(2020, 05, 16),
+array:5 [ 
+  "title" => "Hello laravel-data"
+  "content" => "This is an introduction post for the new package"
+  "status" => App\Enums\PostStatus {
+    +name: "published"
+    +value: "published"
+  }
+  "image" => null
+  "published_at" => Carbon\CarbonImmutable {
+  		... 
+  }
 ]
+
 ```
 
 As you can see, if we transform a data object to JSON, the `CarbonImmutable` published at date is transformed into a string.
 
 ## Using transformers
 
-A few sections ago, we used casts to convert simple types into complex types. Transformers work the other way around. They transform complex types into simple ones and transform a data object into a simpler structure like an array or JSON.
+A few sections ago, we used casts to cast simple types into complex types. Transformers work the other way around. They transform complex types into simple ones and transform a data object into a simpler structure like an array or JSON.
 
-Just like the `DateTimeInterfaceCast` we also have a `DateTimeInterfaceTransformer` that will convert `DateTime`, `Carbon`, ... objects into strings.
+Like the `DateTimeInterfaceCast`, we also have a `DateTimeInterfaceTransformer` that converts `DateTime,` `Carbon,`... objects into strings.
 
 This `DateTimeInterfaceTransformer` is registered in the `data.php` config file and will automatically be used when a data object needs to transform a `DateTimeInterface` object:
 
@@ -434,20 +682,23 @@ This `DateTimeInterfaceTransformer` is registered in the `data.php` config file 
 ],
 ```
 
-The value of the `PostStatus` enum is automatically transformed to a string because it implements `JsonSerializable`, but it is perfectly possible to write a custom transformer for it just like we built our custom cast a few sections ago:
+Remember the image object we created earlier; we stored a file size and filename in the object. But that could be more useful; let's provide the URL to the file when transforming the object. Just like casts, transformers also can be local. Let's implement one for `Image`:
 
 ```php
-class PostStatusTransformer implements Transformer
+class ImageTransformer implements Transformer
 {
-    public function transform(DataProperty $property, mixed $value): string
+    public function transform(DataProperty $property, mixed $value, TransformationContext $context): string
     {
-        /** @var \App\Enums\PostStatus $value */
-        return $value->value;
+        if (! $value instanceof Image) {
+            throw new Exception("Not an image");
+        }
+
+        return url($value->filename);
     }
 }
 ```
 
-We now can use this transformer in the data object like this:
+We can now use this transformer in the data object like this:
 
 ```php
 class PostData extends Data
@@ -455,42 +706,77 @@ class PostData extends Data
     public function __construct(
         public string $title,
         public string $content,
-        #[WithTransformer(PostStatusTransformer::class)]
         public PostStatus $status,
+        #[WithCast(ImageCast::class)]
+        #[WithTransformer(ImageTransformer::class)]
+        public ?Image $image,
+        #[Date]
         public ?CarbonImmutable $published_at
     ) {
     }
 }
 ```
 
-You can read a lot more about transformers [here](/docs/laravel-data/v2/as-a-resource/transformers).
+In our controller, we return the object as such:
+
+```php
+public function __invoke()
+{
+    return PostData::from([
+        'title' => 'Hello laravel-data',
+        'content' => 'This is an introduction post for the new package',
+        'status' => PostStatus::published,
+        'image' => [
+            'filename' => 'images/8JQtgd0XaPtt9CqkPJ3eWFVV4BAp6JR9ltYAIKqX.png',
+            'size' => 16524
+        ],
+        'published_at' => CarbonImmutable::create(2020, 05, 16),
+    ]);
+}
+```
+
+Which leads to the following JSON:
+
+```php
+{
+    "title": "Hello laravel-data",
+    "content": "This is an introduction post for the new package",
+    "status": "published",
+    "image": "http://laravel-playbox.test/images/8JQtgd0XaPtt9CqkPJ3eWFVV4BAp6JR9ltYAIKqX.png",
+    "published_at": "2020-05-16T00:00:00+00:00"
+}
+```
+
+You can read more about transformers [here](/docs/laravel-data/v4/as-a-resource/transformers).
 
 ## Generating a blueprint
 
-We now can send our posts as JSON to the front, but what if we want to create a new post? When using Inertia, for example, we might need an empty blueprint object like this that the user could fill in:
+We can now send our posts as JSON to the front, but what if we want to create a new post? When using Inertia, for example, we might need an empty blueprint object like this that the user could fill in:
 
 ```json
 {
     "title" : null,
     "content" : null,
     "status" : null,
+    "image": null,
     "published_at" : null
 }
 ```
 
-This can be done with the `empty` method, which will return an empty array following the structure of your data object:
+Such an array can be generated with the `empty` method, which will return an empty array following the structure of your data object:
 
 ```php
 PostData::empty();
 ```
 
-This will return the following array:
+Which will return the following array:
 
 ```php
 [
   'title' => null,
   'content' => null,
   'status' => null,
+  'image' => null,
   'published_at' => null,
 ]
 ```
@@ -499,27 +785,13 @@ It is possible to set the status of the post to draft by default:
 
 ```php
 PostData::empty([
-    'status' => 'draft';
+    'status' => PostStatus::draft;
 ]);
 ```
 
 ## Lazy properties
 
-For the last section of this quickstart, we're going to take a look at the `AuthorData` object again:
-
-```php
-class AuthorData extends Data
-{
-    public function __construct(
-        public string $name,
-        /** @var \App\Data\PostData[] */
-        public DataCollection $posts
-    ) {
-    }
-}
-```
-
-Let's say that we want to compose a list of all the authors. What if we had 100+ authors who have all written more than 100+ posts:
+For the last section of this quickstart, we will look at the `AuthorData` object again; let's say that we want to compose a list of all the authors. What if we had 100+ authors who have all written more than 100+ posts:
 
 ```json
 [
@@ -530,6 +802,7 @@ Let's say that we want to compose a list of all the authors. What if we had 100+
                 "title" : "Hello laravel-data",
                 "content" : "This is an introduction post for the new package",
                 "status" : "published",
+                "image" : "http://laravel-playbox.test/images/8JQtgd0XaPtt9CqkPJ3eWFVV4BAp6JR9ltYAIKqX.png",
                 "published_at" : "2021-09-24T13:31:20+00:00"
             }
 
@@ -543,6 +816,7 @@ Let's say that we want to compose a list of all the authors. What if we had 100+
                 "title" : "Hello laravel-event-sourcing",
                 "content" : "This is an introduction post for the new package",
                 "status" : "published",
+                "image" : "http://laravel-playbox.test/images/8JQtgd0XaPtt9CqkPJ3eWFVV4BAp6JR9ltYAIKqX.png"
                 "published_at" : "2021-09-24T13:31:20+00:00"
             }
 
@@ -554,7 +828,7 @@ Let's say that we want to compose a list of all the authors. What if we had 100+
 ]
 ```
 
-As you can see, this will quickly be a large set of data we would send over JSON, which we don't want to do.  Since each author includes not only his name but also all the posts he has written.
+As you can see, this will quickly be a large set of data we would send over JSON, which we don't want to do. Since each author includes his name and all the posts, he has written.
 
 In the end, we only want something like this:
 
@@ -571,15 +845,17 @@ In the end, we only want something like this:
 ]
 ```
 
-This can be achieved with lazy properties. Lazy properties are only added to a payload when we explicitly ask it. They work with closures that are executed only when this is required:
+This functionality can be achieved with lazy properties. Lazy properties are only added to a payload when we explicitly ask it. They work with closures that are executed only when this is required:
 
 ```php
 class AuthorData extends Data
 {
+    /**
+    * @param Collection<PostData>|Lazy $posts
+    */
     public function __construct(
         public string $name,
-        /** @var \App\Data\PostData[] */
-        public DataCollection|Lazy $posts
+        public Collection|Lazy $posts
     ) {
     }
 
@@ -587,7 +863,7 @@ class AuthorData extends Data
     {
         return new self(
             $author->name,
-            Lazy::create(fn() => PostData::collection($author->posts))
+            Lazy::create(fn() => PostData::collect($author->posts))
         );
     }
 }
@@ -626,7 +902,7 @@ If we want to include the posts, the only thing we need to do is this:
 $postData->include('posts')->toJson();
 ```
 
-This will result in this JSON:
+Which will result in this JSON:
 
 ```json
 {
@@ -642,7 +918,7 @@ This will result in this JSON:
 }
 ```
 
-Let's take this one step further. What if we want to be able only to include the title of each post? We can do this by making all the other properties within the post data object also lazy:
+Let's take this one step further. What if we want to only include the title of each post? We can do this by making all the other properties within the post data object also lazy:
 
 ```php
 class PostData extends Data
@@ -650,32 +926,43 @@ class PostData extends Data
     public function __construct(
         public string|Lazy $title,
         public string|Lazy $content,
-        #[WithCast(PostStatusCast::class)]
         public PostStatus|Lazy $status,
-        #[WithTransformer(DateTimeInterfaceTransformer::class, format: 'd-M')]
+        #[WithoutValidation]
+        #[WithCast(ImageCast::class)]
+        #[WithTransformer(ImageTransformer::class)]
+        public ImageData|Lazy|null $image,
+        #[Date]
         public CarbonImmutable|Lazy|null $published_at
     ) {
     }
-
+    
     public static function fromModel(Post $post): PostData
     {
         return new self(
             Lazy::create(fn() => $post->title),
             Lazy::create(fn() => $post->content),
             Lazy::create(fn() => $post->status),
+            Lazy::create(fn() => $post->image),
             Lazy::create(fn() => $post->published_at)
         );
+    }
+
+    public static function rules(ValidationContext $context): array
+    {
+        return [
+            'image' => ['nullable', 'image'],
+        ];
     }
 }
 ```
 
-Now the only thing we need to do is including the title:
+Now the only thing we need to do is include the title:
 
 ```php
 $postData->include('posts.title')->toJson();
 ```
 
-This will result in this JSON:
+Which will result in this JSON:
 
 ```json
 {
@@ -704,13 +991,21 @@ You can do quite a lot with lazy properties like including them:
 
 - when a model relation is loaded like Laravel API resources
 - when they are requested in the URL query
-- by default with an option to exclude them
+- by default, with an option to exclude them
 
-And a lot more. You can read all about it [here](/docs/laravel-data/v2/as-a-resource/lazy-properties).
+And a lot more. You can read all about it [here](/docs/laravel-data/v4/as-a-resource/lazy-properties).
 
-So that's it, a quick overview of this package. There's still a lot more you can do with data objects like:
+## Conclusion
 
-- [casting](/docs/laravel-data/v2/advanced-usage/eloquent-casting) them into Eloquent models
-- [transforming](/docs/laravel-data/v2/advanced-usage/typescript) the structure to typescript
-- [working](https://spatie.be/docs/laravel-data/v2/as-a-data-transfer-object/collections) with `DataCollections`
-- you find it all in these docs
+So that's it, a quick overview of this package. We barely scratched the surface of what's possible with the package. There's still a lot more you can do with data objects like:
+
+- [casting](/docs/laravel-data/v4/advanced-usage/eloquent-casting) them into Eloquent models
+- [transforming](/docs/laravel-data/v4/advanced-usage/typescript) the structure to typescript
+- [working](/docs/laravel-data/v4/as-a-data-transfer-object/collections) with `DataCollections`
+- [optional properties](/docs/laravel-data/v4/as-a-data-transfer-object/optional-properties) not always required when creating a data object
+- [wrapping](/docs/laravel-data/v4/as-a-resource/wrapping) transformed data into keys
+- [mapping](/docs/laravel-data/v4/as-a-data-transfer-object/mapping-property-names) property names when creating or transforming a data object
+- [appending](/docs/laravel-data/v4/as-a-resource/appending-properties) extra data
+- [including](/docs/laravel-data/v4/as-a-resource/lazy-properties#content-using-query-strings) properties using the URL query string
+- [inertia](https://spatie.be/docs/laravel-data/v4/advanced-usage/use-with-inertia) support for lazy properties
+- and so much more ... you'll find all the information here in the docs

@@ -6,8 +6,9 @@ use Attribute;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Spatie\LaravelData\Exceptions\CannotBuildValidationRule;
+use Spatie\LaravelData\Support\Validation\References\RouteParameterReference;
 
-#[Attribute(Attribute::TARGET_PROPERTY)]
+#[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_PARAMETER)]
 class Email extends StringValidationAttribute
 {
     public const RfcValidation = 'rfc';
@@ -18,7 +19,7 @@ class Email extends StringValidationAttribute
 
     protected array $modes;
 
-    public function __construct(array | string ...$modes)
+    public function __construct(array|string|RouteParameterReference ...$modes)
     {
         $this->modes = Arr::flatten($modes);
     }

@@ -3,17 +3,20 @@
 namespace Spatie\LaravelData\Tests;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Spatie\LaravelData\LaravelDataServiceProvider;
 
 class TestCase extends Orchestra
 {
-    use RefreshDatabase;
-
     protected function setUp(): void
     {
         parent::setUp();
+
+        config()->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+
+        foreach (config('data.features') as $feature => $value) {
+            config()->set("data.features.{$feature}", true);
+        }
 
         Model::unguard();
     }
@@ -33,6 +36,6 @@ class TestCase extends Orchestra
 
     protected function defineDatabaseMigrations()
     {
-        $this->loadMigrationsFrom(__DIR__ . '/Migrations');
+        $this->loadMigrationsFrom(__DIR__.'/Migrations');
     }
 }

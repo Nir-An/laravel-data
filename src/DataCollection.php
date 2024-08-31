@@ -3,16 +3,24 @@
 namespace Spatie\LaravelData;
 
 use ArrayAccess;
+use Countable;
+use Illuminate\Contracts\Support\Responsable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Enumerable;
+use IteratorAggregate;
 use Spatie\LaravelData\Concerns\BaseDataCollectable;
+use Spatie\LaravelData\Concerns\ContextableData;
 use Spatie\LaravelData\Concerns\EnumerableMethods;
 use Spatie\LaravelData\Concerns\IncludeableData;
 use Spatie\LaravelData\Concerns\ResponsableData;
 use Spatie\LaravelData\Concerns\TransformableData;
 use Spatie\LaravelData\Concerns\WrappableData;
 use Spatie\LaravelData\Contracts\BaseData;
-use Spatie\LaravelData\Contracts\DataCollectable;
+use Spatie\LaravelData\Contracts\BaseDataCollectable as BaseDataCollectableContract;
+use Spatie\LaravelData\Contracts\IncludeableData as IncludeableDataContract;
+use Spatie\LaravelData\Contracts\ResponsableData as ResponsableDataContract;
+use Spatie\LaravelData\Contracts\TransformableData as TransformableDataContract;
+use Spatie\LaravelData\Contracts\WrappableData as WrappableDataContract;
 use Spatie\LaravelData\Exceptions\CannotCastData;
 use Spatie\LaravelData\Exceptions\InvalidDataCollectionOperation;
 use Spatie\LaravelData\Support\EloquentCasts\DataCollectionEloquentCast;
@@ -22,9 +30,9 @@ use Spatie\LaravelData\Support\EloquentCasts\DataCollectionEloquentCast;
  * @template TValue
  *
  * @implements \ArrayAccess<TKey, TValue>
- * @implements  DataCollectable<TKey, TValue>
+ * @implements  IteratorAggregate<TKey, TValue>
  */
-class DataCollection implements DataCollectable, ArrayAccess
+class DataCollection implements Responsable, BaseDataCollectableContract, TransformableDataContract, ResponsableDataContract, IncludeableDataContract, WrappableDataContract, IteratorAggregate, Countable, ArrayAccess
 {
     /** @use \Spatie\LaravelData\Concerns\BaseDataCollectable<TKey, TValue> */
     use BaseDataCollectable;
@@ -32,6 +40,7 @@ class DataCollection implements DataCollectable, ArrayAccess
     use IncludeableData;
     use WrappableData;
     use TransformableData;
+    use ContextableData;
 
     /** @use \Spatie\LaravelData\Concerns\EnumerableMethods<TKey, TValue> */
     use EnumerableMethods;
@@ -45,9 +54,9 @@ class DataCollection implements DataCollectable, ArrayAccess
      */
     public function __construct(
         public readonly string $dataClass,
-        Enumerable|array|DataCollection $items
+        Enumerable|array|DataCollection|null $items
     ) {
-        if (is_array($items)) {
+        if (is_array($items) || is_null($items)) {
             $items = new Collection($items);
         }
 
@@ -68,6 +77,9 @@ class DataCollection implements DataCollectable, ArrayAccess
         return $this->items->all();
     }
 
+    /**
+     * @return Enumerable<TKey, TValue>
+     */
     public function toCollection(): Enumerable
     {
         return $this->items;
@@ -98,7 +110,13 @@ class DataCollection implements DataCollectable, ArrayAccess
             throw InvalidDataCollectionOperation::create();
         }
 
-        return $this->items->offsetGet($offset);
+        $data = $this->items->offsetGet($offset);
+
+        if ($data instanceof IncludeableDataContract) {
+            $data->getDataContext()->mergePartials($this->getDataContext());
+        }
+
+        return $data;
     }
 
     /**
@@ -136,10 +154,10 @@ class DataCollection implements DataCollectable, ArrayAccess
 
     public static function castUsing(array $arguments)
     {
-        if (count($arguments) !== 1) {
+        if (count($arguments) < 1) {
             throw CannotCastData::dataCollectionTypeRequired();
         }
 
-        return new DataCollectionEloquentCast(current($arguments));
+        return new DataCollectionEloquentCast($arguments[0], static::class, array_slice($arguments, 1));
     }
 }

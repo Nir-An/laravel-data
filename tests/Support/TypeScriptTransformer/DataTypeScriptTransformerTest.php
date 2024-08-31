@@ -11,12 +11,15 @@ use Spatie\LaravelData\Lazy;
 use Spatie\LaravelData\Mappers\SnakeCaseMapper;
 use Spatie\LaravelData\Optional;
 use Spatie\LaravelData\PaginatedDataCollection;
+use Spatie\LaravelData\Support\Lazy\ClosureLazy;
 use Spatie\LaravelData\Support\TypeScriptTransformer\DataTypeScriptTransformer;
+use Spatie\LaravelData\Tests\Fakes\DataWithMapper;
 use Spatie\LaravelData\Tests\Fakes\SimpleData;
 
 use function Spatie\Snapshots\assertMatchesSnapshot as baseAssertMatchesSnapshot;
 
 use Spatie\Snapshots\Driver;
+use Spatie\TypeScriptTransformer\Attributes\Hidden as TypeScriptHidden;
 use Spatie\TypeScriptTransformer\Attributes\Optional as TypeScriptOptional;
 use Spatie\TypeScriptTransformer\TypeScriptTransformerConfig;
 
@@ -28,7 +31,7 @@ function assertMatchesSnapshot($actual, Driver $driver = null): void
 it('can convert a data object to Typescript', function () {
     $config = TypeScriptTransformerConfig::create();
 
-    $data = new class (null, Optional::create(), 42, true, 'Hello world', 3.14, ['the', 'meaning', 'of', 'life'], Lazy::create(fn () => 'Lazy'), SimpleData::from('Simple data'), SimpleData::collection([]), SimpleData::collection([]), SimpleData::collection([])) extends Data {
+    $data = new class (null, Optional::create(), 42, true, 'Hello world', 3.14, ['the', 'meaning', 'of', 'life'], Lazy::create(fn () => 'Lazy'), Lazy::closure(fn () => 'Lazy'), SimpleData::from('Simple data'), SimpleData::collect([], DataCollection::class), SimpleData::collect([], DataCollection::class), SimpleData::collect([], DataCollection::class)) extends Data {
         public function __construct(
             public null|int $nullable,
             public Optional|int $undefineable,
@@ -39,6 +42,7 @@ it('can convert a data object to Typescript', function () {
             /** @var string[] */
             public array $array,
             public Lazy|string $lazy,
+            public ClosureLazy|string $closureLazy,
             public SimpleData $simpleData,
             /** @var \Spatie\LaravelData\Tests\Fakes\SimpleData[] */
             public DataCollection $dataCollection,
@@ -61,7 +65,7 @@ it('can convert a data object to Typescript', function () {
 it('uses the correct types for data collection of attributes', function () {
     $config = TypeScriptTransformerConfig::create();
 
-    $collection = SimpleData::collection([]);
+    $collection = SimpleData::collect([], DataCollection::class);
 
     $data = new class ($collection, $collection, $collection, $collection, $collection, $collection, $collection) extends Data {
         public function __construct(
@@ -94,7 +98,7 @@ it('uses the correct types for data collection of attributes', function () {
 it('uses the correct types for paginated data collection for attributes ', function () {
     $config = TypeScriptTransformerConfig::create();
 
-    $collection = SimpleData::collection(new LengthAwarePaginator([], 0, 15));
+    $collection = SimpleData::collect(new LengthAwarePaginator([], 0, 15), PaginatedDataCollection::class);
 
     $data = new class ($collection, $collection, $collection, $collection, $collection, $collection, $collection) extends Data {
         public function __construct(
@@ -127,7 +131,7 @@ it('uses the correct types for paginated data collection for attributes ', funct
 it('uses the correct types for cursor paginated data collection of attributes', function () {
     $config = TypeScriptTransformerConfig::create();
 
-    $collection = SimpleData::collection(new CursorPaginator([], 15));
+    $collection = SimpleData::collect(new CursorPaginator([], 15), CursorPaginatedDataCollection::class);
 
     $data = new class ($collection, $collection, $collection, $collection, $collection, $collection, $collection) extends Data {
         public function __construct(
@@ -157,13 +161,15 @@ it('uses the correct types for cursor paginated data collection of attributes', 
     assertMatchesSnapshot($transformer->transform($reflection, 'DataObject')->transformed);
 });
 
-it('outputs types with properties using their mapped name', function () {
+it('outputs types with properties using their mapped name on a property', function () {
     $config = TypeScriptTransformerConfig::create();
 
-    $data = new class ('Good job Ruben') extends Data {
+    $data = new class ('Good job Ruben', 'Hi Ruben') extends Data {
         public function __construct(
             #[MapOutputName(SnakeCaseMapper::class)]
             public string $someCamelCaseProperty,
+            #[MapOutputName('some:non:standard:property')]
+            public string $someNonStandardProperty,
         ) {
         }
     };
@@ -174,6 +180,17 @@ it('outputs types with properties using their mapped name', function () {
     expect($transformer->canTransform($reflection))->toBeTrue();
     assertMatchesSnapshot($transformer->transform($reflection, 'DataObject')->transformed);
 });
+
+it('outputs types with properties using their mapped name on a class', function () {
+    $config = TypeScriptTransformerConfig::create();
+
+    $transformer = new DataTypeScriptTransformer($config);
+    $reflection = new ReflectionClass(DataWithMapper::class);
+
+    expect($transformer->canTransform($reflection))->toBeTrue();
+    assertMatchesSnapshot($transformer->transform($reflection, 'DataObject')->transformed);
+});
+
 
 it('it respects a TypeScript property optional attribute', function () {
     $config = TypeScriptTransformerConfig::create();
@@ -213,7 +230,9 @@ it('it respects a TypeScript class optional attribute', function () {
             public string $name,
         ) {
         }
-    };
+    }
+
+    ;
 
     $transformer = new DataTypeScriptTransformer($config);
     $reflection = new ReflectionClass(DummyTypeScriptOptionalClass::class);
@@ -224,6 +243,80 @@ it('it respects a TypeScript class optional attribute', function () {
         {
         id?: number;
         name?: string;
+        }
+        TXT,
+        $transformer->transform($reflection, 'DataObject')->transformed
+    );
+});
+
+it('it respects a TypeScript property hidden attribute', function () {
+    $config = TypeScriptTransformerConfig::create();
+
+    $data = new class (10, 'Ruben') extends Data {
+        public function __construct(
+            #[TypeScriptHidden]
+            public int $id,
+            public string $name,
+        ) {
+        }
+    };
+
+    $transformer = new DataTypeScriptTransformer($config);
+    $reflection = new ReflectionClass($data);
+
+    $this->assertTrue($transformer->canTransform($reflection));
+    $this->assertEquals(
+        <<<TXT
+        {
+        name: string;
+        }
+        TXT,
+        $transformer->transform($reflection, 'DataObject')->transformed
+    );
+});
+
+it('can transform a collection as a TypeScript record', function () {
+    $config = TypeScriptTransformerConfig::create();
+
+    $data = new class () extends Data {
+        /** @var \Spatie\LaravelData\Tests\Fakes\SimpleData[] */
+        public array $collectionAsArray;
+
+        /** @var array<string, \Spatie\LaravelData\Tests\Fakes\SimpleData> */
+        public array $collectionAsRecord;
+    };
+
+    $transformer = new DataTypeScriptTransformer($config);
+    $reflection = new ReflectionClass($data);
+
+    $this->assertTrue($transformer->canTransform($reflection));
+    $this->assertEquals(
+        <<<TXT
+        {
+        collectionAsArray: Array<{%Spatie\LaravelData\Tests\Fakes\SimpleData%}>;
+        collectionAsRecord: { [key: string]: {%Spatie\LaravelData\Tests\Fakes\SimpleData%} };
+        }
+        TXT,
+        $transformer->transform($reflection, 'DataObject')->transformed
+    );
+});
+
+it('will transform a collection with int key as an array', function () {
+    $config = TypeScriptTransformerConfig::create();
+
+    $data = new class () extends Data {
+        /** @var array<int, \Spatie\LaravelData\Tests\Fakes\SimpleData> */
+        public array $collection;
+    };
+
+    $transformer = new DataTypeScriptTransformer($config);
+    $reflection = new ReflectionClass($data);
+
+    $this->assertTrue($transformer->canTransform($reflection));
+    $this->assertEquals(
+        <<<TXT
+        {
+        collection: Array<{%Spatie\LaravelData\Tests\Fakes\SimpleData%}>;
         }
         TXT,
         $transformer->transform($reflection, 'DataObject')->transformed
